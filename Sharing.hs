@@ -4,14 +4,16 @@ module Sharing where
 -- Standard libraries
 import Data.Typeable
 import Control.Monad
+import Control.Monad.State
 import Prelude hiding (exp)
 import Control.Applicative hiding (Const)
 import Data.HashTable               as Hash
 import qualified Data.IntMap        as IntMap
 import System.Mem.StableName
 import Data.Hashable
-import Text.Printf 
+import Text.Printf
 import System.IO.Unsafe
+import Data.IORef
 
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as Map
@@ -72,7 +74,7 @@ matchStableExp sn1 (StableSharingExp sn2 _)
   | otherwise              = False
 
 -- Hash table keyed on the stable names of array computations.
---    
+--
 type ExpHashTable v = Hash.HashTable StableExpName v
 
 -- Mutable version of the occurrence map, which associates each AST node with an occurence count.
@@ -108,9 +110,9 @@ freezeOccMap oc
 -- not exist in the map, return an occurence count of '1'.
 --
 lookupWithExpName :: OccMap -> StableExpName -> Int
-lookupWithExpName oc sa@(StableExpName sn) 
+lookupWithExpName oc sa@(StableExpName sn)
   = fromMaybe 1 $ IntMap.lookup (hashStableName sn) oc >>= Prelude.lookup sa
-    
+
 -- Look up the occurence map keyed by array computations using a sharing array computation.  If an
 -- the key does not exist in the map, return an occurence count of '1'.
 --
@@ -123,23 +125,24 @@ lookupWithSharingExp oc (StableSharingExp sn _) = lookupWithExpName oc (StableEx
 --
 -- Note [Traversing functions and side effects]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 -- We need to descent into function bodies to build the 'OccMap' with all occurences in the
 -- function bodies.  Due to the side effects in the construction of the occurence map and, more
--- importantly, the dependence of the second phase on /global/ occurence information, we may not
--- delay the body traversals by putting them under a lambda.  Hence, we apply the each function, to
--- traverse its body and use a /dummy abstraction/ of the result.
+-- importantly, the dependence of the second phase on /global/ occurence information, we may
+-- not delay the body traversals by putting them under a lambda.  Hence, we apply each function
+-- to a /unique identifier/ and then traverse its body.
 --
--- For example, given a function 'f', we traverse 'f (Tag 0)', which yields a transformed body 'e'.
--- As the result of the traversal of the overall function, we use 'const e'.  Hence, it is crucial
--- that the 'Tag' supplied during the initial traversal is already the one required by the HOAS to
--- de Bruijn conversion in 'convertSharingExp' — any subsequent application of 'const e' will only
--- yield 'e' with the embedded 'Tag 0' of the original application.
+-- We then wrap the result in the 'Tlam' constructor (which means 'tagged lambda body') along
+-- with the unique identifier. During conversion to de Bruijn form we find 'Tag's with this
+-- unique identifier and map them to the correct de Bruijn index. See function
+-- 'convertSharingExp' in module Convert
 --
 makeOccMap :: Typeable a => Exp a -> IO (SharingExp a, OccMapHash)
 makeOccMap rootExp
   = do
+      uniques <- newIORef 0
       occMap <- newExpHashTable
-      rootExp' <- traverseExp 0 True (enterOcc occMap) rootExp
+      rootExp' <- traverseExp uniques True (enterOcc occMap) rootExp
       return (rootExp', occMap)
   where
     -- Enter one AST node occurrence into an occurrence map.  Returns 'True' if this is a repeated
@@ -149,25 +152,28 @@ makeOccMap rootExp
     -- functions and side effects].
     --
     enterOcc :: OccMapHash -> Bool -> StableExpName -> IO Bool
-    enterOcc occMap updateMap sa 
+    enterOcc occMap updateMap sa
       = do
           entry <- Hash.lookup occMap sa
           case entry of
-            Nothing -> when updateMap (       Hash.insert occMap sa 1      ) >> return False
-            Just n  -> when updateMap (void $ Hash.update occMap sa (n + 1)) >> return True
+            Nothing -> do when updateMap (       Hash.insert occMap sa 1      )
+                          return False
+            Just n  -> do when updateMap (void $ Hash.update occMap sa (n + 1))
+                          return True
               where
                 void = (>> return ())
 
     traverseExp :: forall a. Typeable a
-                => Int -> Bool -> (Bool -> StableExpName -> IO Bool) -> Exp a -> IO (SharingExp a)
-    traverseExp envSize updateMap enter acc'@(Exp pexp)
+                => IORef Int -> Bool -> (Bool -> StableExpName -> IO Bool) -> Exp a
+                -> IO (SharingExp a)
+    traverseExp uniques updateMap enter acc'@(Exp pexp)
       = do
             -- Compute stable name and enter it into the occurence map
           sn <- makeStableExp acc'
           isRepeatedOccurence <- enter updateMap $ StableExpName sn
-          
+
           traceLine (showOp pexp) $
-            if isRepeatedOccurence 
+            if isRepeatedOccurence
               then "REPEATED occurence"
               else "first occurence (" ++ show (hashStableName sn) ++ ")"
 
@@ -175,7 +181,7 @@ makeOccMap rootExp
             --
             -- NB: This function can only be used in the case alternatives below; outside of the
             --     case we cannot discharge the 'Elt a' constraint.
-          let reconstruct :: Elt a 
+          let reconstruct :: Elt a
                           => IO (PreExp SharingExp a)
                           -> IO (SharingExp a)
               reconstruct newExp | isRepeatedOccurence = pure $ VarSharing sn
@@ -183,7 +189,6 @@ makeOccMap rootExp
 
           case pexp of
             Tag i       -> reconstruct $ return $ Tag i
-            Ltag i      -> reconstruct $ return $ Ltag i
             App fun arg -> reconstruct $ do
                               fun' <- travF fun
                               arg' <- travE arg
@@ -202,21 +207,21 @@ makeOccMap rootExp
                              a' <- travE a
                              b' <- travE b
                              return (Eq a' b')
-                 
       where
         travF :: (PreFun Exp b) -> IO (PreFun SharingExp b)
-        travF = traverseFun envSize updateMap enter
-        
-        travE :: Typeable b => Exp b -> IO (SharingExp b)
-        travE = traverseExp envSize updateMap enter
-    -- See Note on [Traversing functions and side effects]
-    traverseFun :: Int -> Bool -> (Bool -> StableExpName -> IO Bool) 
-                -> (PreFun Exp b) -> IO (PreFun SharingExp b)
-    traverseFun envSize updateMap enter (Lam f) = do
-      body <- traverseExp (envSize+1) updateMap enter $ f (Exp $ Tag envSize)
-      return $ Lam (const body)      
+        travF = traverseFun uniques updateMap enter
 
----------
+        travE :: Typeable b => Exp b -> IO (SharingExp b)
+        travE = traverseExp uniques updateMap enter
+    -- See Note on [Traversing functions and side effects]
+    traverseFun :: IORef Int -> Bool -> (Bool -> StableExpName -> IO Bool)
+                -> (PreFun Exp b) -> IO (PreFun SharingExp b)
+    traverseFun uniques updateMap enter (Lam f) = do
+      unique <- readIORef uniques
+      writeIORef uniques (unique + 1)
+      body <- traverseExp uniques updateMap enter $ f (Exp $ Tag unique)
+
+      return $ Tlam unique body
 
 --
 -- 'NodeCounts' is a type used to maintain how often each shared subterm occured and the
@@ -382,25 +387,26 @@ stableSharingExpsForDepGroup dg = topoSort (Map.keys $ nodes dg) Set.empty []
                 Nothing -> (visited', accum)
          in (visited'', element : accum'')
 
----------
 
+--
+-- Invariant. All values of type PreFun SharingExp a are constructed with Tlam not Lam
+--
 determineScopes :: Typeable a => OccMap -> SharingExp a -> SharingExp a
 determineScopes occMap rootAcc = fst $ scopesExp rootAcc
   where
     scopesExp :: forall a. SharingExp a -> (SharingExp a, NodeCounts)
     scopesExp (LetSharing _ _) = error "determineScopes: scopes: unexpected 'LetSharing'"
     scopesExp sharingExp@(VarSharing sn) = trace debugMsg (VarSharing sn, newCount)
-      where 
+      where
         newCount = nodeCount (StableSharingExp sn sharingExp) noNodeCounts
         debugMsg = printf "%s: (VarSharing) %s" (show $ StableExpName sn) (show newCount)
     scopesExp (ExpSharing sn pexp) = case pexp of
       Tag i            -> reconstruct (Tag i) noNodeCounts
-      Ltag i           -> reconstruct (Ltag i) noNodeCounts
-      App fun arg      -> let 
-                            (fun', accCount1) = scopesFun fun 
+      App fun arg      -> let
+                            (fun', accCount1) = scopesFun fun
                             (arg', accCount2) = scopesExp arg
                           in reconstruct (App fun' arg') (accCount1 +++ accCount2)
-      Const i          -> reconstruct (Const i) noNodeCounts
+      Const v          -> reconstruct (Const v) noNodeCounts
       Add e1 e2        -> let
                             (e1', accCount1) = scopesExp e1
                             (e2', accCount2) = scopesExp e2
@@ -409,20 +415,20 @@ determineScopes occMap rootAcc = fst $ scopesExp rootAcc
                             (cnd', accCount1) = scopesExp cnd
                             (thn', accCount2) = scopesExp thn
                             (els', accCount3) = scopesExp els
-                          in reconstruct (Cond cnd' thn' els') 
+                          in reconstruct (Cond cnd' thn' els')
                                (accCount1 +++ accCount2 +++ accCount3)
       Eq e1 e2         -> let
                             (e1', accCount1) = scopesExp e1
                             (e2', accCount2) = scopesExp e2
                           in reconstruct (Eq e1' e2') (accCount1 +++ accCount2)
       where
-        -- trav  
+        -- trav
         occCount = lookupWithExpName occMap (StableExpName sn)
         reconstruct :: Elt a => PreExp SharingExp a -> NodeCounts -> (SharingExp a, NodeCounts)
         reconstruct newExp subCount = trace debugMsg reconstruct'
           where
             debugMsg = printf ("%s: bindHere = %s\n" ++
-                               "   subCount = %s\n" ++             
+                               "   subCount = %s\n" ++
                                "   newCount = %s\n" ++
                                "   newNodeCounts = %s")
                         (show $ StableExpName sn) (show $ bindHere) (show $ subCount)
@@ -445,7 +451,7 @@ determineScopes occMap rootAcc = fst $ scopesExp rootAcc
         -- counts then they are filtered out.
         --
         filterCompleted :: NodeCounts -> (NodeCounts, [StableSharingExp])
-        filterCompleted (NodeCounts counts) 
+        filterCompleted (NodeCounts counts)
           = let (counts', completed) = fc counts
             in (NodeCounts counts', completed)
           where
@@ -461,15 +467,16 @@ determineScopes occMap rootAcc = fst $ scopesExp rootAcc
                 -- and the things to be bound.
                 readyToBind :: DepGroup -> (Bool, [StableSharingExp])
                 readyToBind dg = (isReady, map fst toBind)
-                  where 
+                  where
                     toBind = stableSharingExpsForDepGroup dg
                     isReady = all (\(sa,n) -> lookupWithSharingExp occMap sa == n) toBind
         -- The lambda bound variable is at this point already irrelevant; for details see
         -- Note [Traversing functions and side effects]
         scopesFun :: SharingFun b -> (SharingFun b, NodeCounts)
-        scopesFun (Lam fun) = (Lam $ const fun', counts)
+        scopesFun (Lam _) = error "Lam should not exist in AST after makeOccMap"
+        scopesFun (Tlam n exp) = (Tlam n exp', counts)
           where
-            (fun', counts) = scopesExp (fun undefined)
+            (exp', counts) = scopesExp exp
 
 type SharingFun t = PreFun SharingExp t
 
@@ -485,12 +492,13 @@ type SharingFun t = PreFun SharingExp t
 --
 recoverSharing :: Typeable a => Exp a -> SharingExp a
 {-# NOINLINE recoverSharing #-}
-recoverSharing expr = 
+recoverSharing expr =
     let (exp, occMap) =   -- as we need to use stable pointers; it's safe as explained above
-          unsafePerformIO $ do
-            (exp', occMap') <- makeOccMap expr
-            occMapList <- Hash.toList occMap'
-            traceChunk "OccMap" $ show occMapList
-            frozenOccMap <- freezeOccMap occMap'
-            return (exp', frozenOccMap)
+            unsafePerformIO $ do
+              (exp', occMap') <- makeOccMap expr
+              occMapList <- Hash.toList occMap'
+              traceChunk "OccMap" $ show occMapList
+              frozenOccMap <- freezeOccMap occMap'
+              return (exp', frozenOccMap)
     in determineScopes occMap exp
+
