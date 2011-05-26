@@ -21,18 +21,18 @@ import qualified AST as AST
 -- Conversion of 'SharingExp's
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 --
--- 'TagEnv' maps the /unique identifier/, @n@, in expressions of form @Tag n@ and functions of
--- form @Tlam n exp@ to an integer equal to the number of lambdas we were under when we first
--- saw @Tlam n exp@.
+-- 'TagEnv' maps the /unique identifier/, @n@, in expressions of form @Tag n@ and 'SharingFun's
+-- of form @TaggedSharingExp n exp@ to an integer equal to the number of lambdas we were under
+-- when we first saw @Tlam n exp@.
 --
 -- Unless the expression is malformed the 'TagEnv' should already contain an entry for @n@ when
--- @Tag n@ is encountered (since @Tag n@ is contained somewhere @exp@ in the function @Tlam n
--- exp@ and the entry is insert into the map when it is encountered).
+-- @Tag n@ is encountered (since @Tag n@ is contained somewhere @exp@ in the function
+-- @TaggedSharingExp n exp@ and the entry is inserted into the map when it is encountered).
 --
 type TagEnv = Map Int Int
 
 convertSharingExp :: forall a. Typeable a
-  => TagEnv        -- tag environment
+  => TagEnv             -- tag environment
   -> Int                -- current lambda environment size
   -> Int                -- current let environment size
   -> [StableSharingExp] -- let environment size
@@ -52,7 +52,7 @@ convertSharingExp m envSize lenvSize lenv (LetSharing sa@(StableSharingExp _ bou
 --
 convertSharingExp m envSize lenvSize lenv (ExpSharing _ preExpr) = cvtPreExp preExpr
    where
-     cvtPreExp :: forall b.Typeable b => PreExp SharingExp b -> AST.Exp b
+     cvtPreExp :: forall b.Typeable b => PreExp SharingExp SharingFun b -> AST.Exp b
      cvtPreExp preExp = case preExp of
        Tag i            -> case Map.lookup i m of
           Nothing -> error (printf "Value for unique tag '%d' not found. Should never happen." i)
@@ -67,14 +67,13 @@ convertSharingExp m envSize lenvSize lenv (ExpSharing _ preExpr) = cvtPreExp pre
         cvtExp = convertSharingExp m envSize lenvSize lenv
 
 convertSharingFun :: forall a b. (Typeable a, Typeable b)
-  => Map Int Int
-  -> Int
-  -> Int
-  -> [StableSharingExp]
+  => Map Int Int     -- TagEnv
+  -> Int             -- lambda environment size
+  -> Int             -- let environment size
+  -> [StableSharingExp] -- let environment
   -> SharingFun (a -> b)
   -> AST.Exp (a -> b)
-convertSharingFun _ _ _ _ (Lam _) = error "Lam should not be present in a value of type SharingFun"
-convertSharingFun m envSize lenvSize lenv (Tlam n exp) =
+convertSharingFun m envSize lenvSize lenv (TaggedSharingExp n exp) =
   AST.Lam $ convertSharingExp (Map.insert n envSize m) (envSize+1) lenvSize lenv exp
 
 --
@@ -91,7 +90,7 @@ convertSharingFun m envSize lenvSize lenv (Tlam n exp) =
 convertExp :: forall a. Typeable a => Int -> Exp a -> AST.Exp a
 convertExp envSize (Exp preExpr) = cvtPreExp preExpr
    where
-     cvtPreExp :: forall b.Typeable b => PreExp Exp b -> AST.Exp b
+     cvtPreExp :: forall b.Typeable b => PreExp Exp Fun b -> AST.Exp b
      cvtPreExp preExp = case preExp of
        Tag i            -> AST.Var   (envSize - i - 1)
        App fun arg      -> AST.App   (convertFun envSize fun) (cvtExp arg)
@@ -127,8 +126,8 @@ eqTest expr = do
 
 -------
 
-t :: Exp Int
-t = app (lam (\x -> app (lam $ \y -> x + y) (constant (1::Int)))) (constant (2::Int))
+t1 :: Exp Int
+t1 = app (lam (\x -> app (lam $ \y -> x + y) (constant (1::Int)))) (constant (2::Int))
 
 t2 :: Exp Int
 t2 = let c = constant (2::Int)

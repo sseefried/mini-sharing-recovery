@@ -4,7 +4,6 @@ module Sharing where
 -- Standard libraries
 import Data.Typeable
 import Control.Monad
-import Control.Monad.State
 import Prelude hiding (exp)
 import Control.Applicative hiding (Const)
 import Data.HashTable               as Hash
@@ -51,7 +50,15 @@ makeStableExp acc = acc `seq` makeStableName acc
 data SharingExp a where
   VarSharing :: Elt a => StableName (Exp a)                           -> SharingExp a
   LetSharing ::          StableSharingExp -> SharingExp a             -> SharingExp a
-  ExpSharing :: Elt a => StableName (Exp a) -> PreExp SharingExp a -> SharingExp a
+  ExpSharing :: Elt a => StableName (Exp a) -> PreExp SharingExp SharingFun a -> SharingExp a
+
+
+-- A "tagged sharing expression". The 'Int' argument is a /unique identifier/.  During sharing
+-- recovery we traverse into function bodies by applying the function under the 'Lam'
+-- constructor to a value @Tag n@ (where @n@ is the unique identifer). During conversion this
+-- unique identifier is mapped to the correct de Bruijn index.
+data SharingFun a where
+  TaggedSharingExp :: Int {-unique -} -> SharingExp b -> SharingFun (a -> b)
 
 -- Stable name for an array computation associated with its sharing-annotated version.
 --
@@ -132,9 +139,9 @@ lookupWithSharingExp oc (StableSharingExp sn _) = lookupWithExpName oc (StableEx
 -- not delay the body traversals by putting them under a lambda.  Hence, we apply each function
 -- to a /unique identifier/ and then traverse its body.
 --
--- We then wrap the result in the 'Tlam' constructor (which means 'tagged lambda body') along
--- with the unique identifier. During conversion to de Bruijn form we find 'Tag's with this
--- unique identifier and map them to the correct de Bruijn index. See function
+-- We then wrap the result in the 'TaggedSharingExp' constructor (see data type 'SharingFun')
+-- along with the unique identifier. During conversion to de Bruijn form we find 'Tag's with
+-- this unique identifier and map them to the correct de Bruijn index. See function
 -- 'convertSharingExp' in module Convert
 --
 makeOccMap :: Typeable a => Exp a -> IO (SharingExp a, OccMapHash)
@@ -182,7 +189,7 @@ makeOccMap rootExp
             -- NB: This function can only be used in the case alternatives below; outside of the
             --     case we cannot discharge the 'Elt a' constraint.
           let reconstruct :: Elt a
-                          => IO (PreExp SharingExp a)
+                          => IO (PreExp SharingExp SharingFun a)
                           -> IO (SharingExp a)
               reconstruct newExp | isRepeatedOccurence = pure $ VarSharing sn
                                  | otherwise           = ExpSharing sn <$> newExp
@@ -208,20 +215,19 @@ makeOccMap rootExp
                              b' <- travE b
                              return (Eq a' b')
       where
-        travF :: (PreFun Exp b) -> IO (PreFun SharingExp b)
+        travF :: Fun b -> IO (SharingFun b)
         travF = traverseFun uniques updateMap enter
 
         travE :: Typeable b => Exp b -> IO (SharingExp b)
         travE = traverseExp uniques updateMap enter
     -- See Note on [Traversing functions and side effects]
     traverseFun :: IORef Int -> Bool -> (Bool -> StableExpName -> IO Bool)
-                -> (PreFun Exp b) -> IO (PreFun SharingExp b)
+                -> Fun b -> IO (SharingFun b)
     traverseFun uniques updateMap enter (Lam f) = do
       unique <- readIORef uniques
       writeIORef uniques (unique + 1)
       body <- traverseExp uniques updateMap enter $ f (Exp $ Tag unique)
-
-      return $ Tlam unique body
+      return $ TaggedSharingExp unique body
 
 --
 -- 'NodeCounts' is a type used to maintain how often each shared subterm occured and the
@@ -387,10 +393,6 @@ stableSharingExpsForDepGroup dg = topoSort (Map.keys $ nodes dg) Set.empty []
                 Nothing -> (visited', accum)
          in (visited'', element : accum'')
 
-
---
--- Invariant. All values of type PreFun SharingExp a are constructed with Tlam not Lam
---
 determineScopes :: Typeable a => OccMap -> SharingExp a -> SharingExp a
 determineScopes occMap rootAcc = fst $ scopesExp rootAcc
   where
@@ -424,7 +426,8 @@ determineScopes occMap rootAcc = fst $ scopesExp rootAcc
       where
         -- trav
         occCount = lookupWithExpName occMap (StableExpName sn)
-        reconstruct :: Elt a => PreExp SharingExp a -> NodeCounts -> (SharingExp a, NodeCounts)
+        reconstruct :: Elt a => PreExp SharingExp SharingFun a
+                    -> NodeCounts -> (SharingExp a, NodeCounts)
         reconstruct newExp subCount = trace debugMsg reconstruct'
           where
             debugMsg = printf ("%s: bindHere = %s\n" ++
@@ -470,17 +473,15 @@ determineScopes occMap rootAcc = fst $ scopesExp rootAcc
                   where
                     toBind = stableSharingExpsForDepGroup dg
                     isReady = all (\(sa,n) -> lookupWithSharingExp occMap sa == n) toBind
-        -- The lambda bound variable is at this point already irrelevant; for details see
-        -- Note [Traversing functions and side effects]
+        -- The lambda bound variable (i.e. @Tag n@ (for some n)) is not affected by the
+        -- traversal here and retains its value; for details see Note [Traversing functions and
+        -- side effects].
         scopesFun :: SharingFun b -> (SharingFun b, NodeCounts)
-        scopesFun (Lam _) = error "Lam should not exist in AST after makeOccMap"
-        scopesFun (Tlam n exp) = (Tlam n exp', counts)
+        scopesFun (TaggedSharingExp n exp) = (TaggedSharingExp n exp', counts)
           where
             (exp', counts) = scopesExp exp
 
-type SharingFun t = PreFun SharingExp t
-
--- |Recover sharing information and annotate the HOAS AST with variable and let binding
+-- | Recover sharing information and annotate the HOAS AST with variable and let binding
 --  annotations.  The first argument determines whether array computations are floated out of
 --  expressions irrespective of whether they are shared or not — 'True' implies floating them out.
 --
@@ -501,4 +502,3 @@ recoverSharing expr =
               frozenOccMap <- freezeOccMap occMap'
               return (exp', frozenOccMap)
     in determineScopes occMap exp
-

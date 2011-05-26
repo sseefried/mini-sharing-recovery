@@ -18,33 +18,30 @@ instance Elt Int
 instance Elt Float
 instance Elt Bool
 
-data PreFun exp t where
-  Lam   :: (Elt a, Elt b) => (exp a -> exp b) -> PreFun exp (a -> b)
-  -- A "tagged lambda body". Only used during sharing recovery and conversion to de Bruijn
-  -- form. The 'Int' argument is a /unique identifier/.  During sharing recovery we traverse
-  -- into function bodies by applying the function under the 'Lam' constructor to a value @Tag n@
-  -- (where @n@ is the unique identifer). During conversion this unique identifier is mapped
-  -- to the correct de Bruijn index.
-  Tlam  :: (Elt a, Elt b) => Int -> exp b -> PreFun exp (a -> b)
+--
+-- We "pull out" lambda terms from the 'PreExp' data type. We want
+-- all expressions to evaluate to a primitive value satisfying type class Elt a.
+--
+data Fun t where
+  Lam   :: (Elt a, Elt b) => (Exp a -> Exp b) -> Fun (a -> b)
 
-data PreExp exp t where
-  Tag   :: Elt a => Int -> PreExp exp a -- tag for lambda bound variables
-  App   :: (Elt a, Elt b) => PreFun exp (a -> b) -> exp a -> PreExp exp b
-  Const :: Elt a => a -> PreExp exp a
-  Add   :: Elt a => exp a -> exp a -> PreExp exp a
-  Cond  :: Elt a => exp Bool -> exp a -> exp a -> PreExp exp a
-  Eq    :: Elt a => exp a -> exp a -> PreExp exp Bool
+data PreExp exp fun t where
+  Tag   :: Elt a => Int -> PreExp exp fun a -- ^ tag for lambda bound variables.
+                                            -- Only used during conversion and sharing recovery.
+  App   :: (Elt a, Elt b) => fun (a -> b) -> exp a -> PreExp exp fun b
+  Const :: Elt a => a -> PreExp exp fun a
+  Add   :: Elt a => exp a -> exp a -> PreExp exp fun a
+  Cond  :: Elt a => exp Bool -> exp a -> exp a -> PreExp exp fun a
+  Eq    :: Elt a => exp a -> exp a -> PreExp exp fun Bool
 
 deriving instance Typeable1 Exp
 
-newtype Exp a = Exp (PreExp Exp a) deriving Eq
-
-type Fun a = PreFun Exp a
+newtype Exp a = Exp (PreExp Exp Fun a) deriving Eq
 
 instance Show (Exp a) where
   show (Exp pexp) = show pexp
 
-instance Show (PreExp Exp a) where
+instance Show (PreExp Exp Fun a) where
   show (Tag  i)     = printf "Tag %s" (show i)
   show (App _ e2)   = printf "App <fun> (%s)" (show e2)
   show (Const i)    = printf "Const %s" (show i)
@@ -52,7 +49,7 @@ instance Show (PreExp Exp a) where
   show (Cond c t e) = printf "Cond (%s) (%s) (%s)" (show c) (show t) (show e)
   show (Eq e1 e2)   = printf "Eq (%s) (%s)" (show e1) (show e2)
 
-instance Elt a => Eq (PreExp exp a) where
+instance Elt a => Eq (PreExp exp fun a) where
   (==) = error "not defined"
 
 instance (Num a, Elt a) => Num (Exp a) where
@@ -79,7 +76,7 @@ c ? (t,e) = Exp $ Cond c t e
 (==*) :: Elt a => Exp a -> Exp a -> Exp Bool
 a ==* b = Exp $ Eq a b
 
-showOp :: PreExp exp a -> String
+showOp :: PreExp exp fun a -> String
 showOp (Tag _)   = "Tag"
 showOp (App _ _) = "App"
 showOp (Const _) = "Const"
@@ -100,7 +97,7 @@ ppExp = go 0
 
 ppPreExp :: (forall b.exp b -> Int -> String)
         -> Int -- let level
-        -> (PreExp exp a)
+        -> (PreExp exp fun a)
         -> String
 ppPreExp _ _ (Tag _) = error "only used during conversion"
 ppPreExp pp lvl (App _ e2)  = printf "<fun> (%s)" (pp e2 lvl)
