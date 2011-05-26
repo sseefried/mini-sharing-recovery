@@ -1,0 +1,4 @@
+h1. Mini Sharing Recovery
+
+Sharing recovery algorithm for the simply typed lambda calculus with arithmetic expressions and
+conditionals.

@@ -1,4 +1,0 @@
-
-Q: Why did you separate out Lam into it's own data structure PreFun?
-
-Q: Why did you have to treat tags differently for the Lam nodes? 
