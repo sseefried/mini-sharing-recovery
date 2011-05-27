@@ -6,12 +6,10 @@ import Prelude hiding (exp)
 import Control.Monad
 import Test.Framework
 import Test.Framework.Providers.HUnit
-import Test.Framework.Providers.QuickCheck (testProperty)
+import Test.Framework.Providers.QuickCheck2 (testProperty)
 import Test.HUnit (Assertion)
 import qualified Test.HUnit as HU
 import Test.QuickCheck
-import Debug.Trace
-
 
 -- friends
 import qualified AST as AST
@@ -33,8 +31,9 @@ tests = [ testGroup "AST tests"
              , testCase "show 1" testHoasShow1B
              ]
          , testGroup "Sharing recovery" 
-             [ testProperty "works" propInlineSharingRecoveryEquality
-             ]
+             ([ testProperty "works" propInlineSharingRecoveryEquality ] ++
+             map (testCase "works" . testSharingRecovery) 
+                       [ testHoas1, testHoas2, testHoas3, testHoas4, testHoas5, testHoas6 ])
          ]
 
 
@@ -64,11 +63,40 @@ testAstInline2 = (show $ AST.inlineExp testAst2) HU.@?= "Add (Const 2) (Const 1)
 testHoas1 :: HOAS.Exp Int
 testHoas1 = HOAS.app (HOAS.lam (\x -> x + 1)) 2
 
+testHoas2 :: HOAS.Exp Int
+testHoas2 = HOAS.app (HOAS.lam (\x -> HOAS.app (HOAS.lam $ \y -> x + y)  1)) 2
+
+
+testHoas3 :: HOAS.Exp Int
+testHoas3 = let c = 2
+                a = HOAS.app (HOAS.lam (\x -> c + c + x)) c
+            in HOAS.app (HOAS.lam (\y -> HOAS.app (HOAS.lam (\x -> x + y + 1)) a)) a
+
+testHoas4 :: HOAS.Exp Int
+testHoas4 = let c = 1
+                a = HOAS.app (HOAS.lam (\x -> c + c + x)) c
+     in (HOAS.app (HOAS.lam (\x -> x + 1)) a) + a
+
+-- --
+-- -- You should be able to recover sharing under lambdas. Here is an example
+-- --
+testHoas5 :: HOAS.Exp Int
+testHoas5 = HOAS.app (HOAS.lam (\x -> a + a + x)) 728
+    where a = 42 + 666
+
+testHoas6 :: HOAS.Exp Int
+testHoas6 = let c = (2 :: HOAS.Exp Int)
+                d = c + c
+            in HOAS.app (HOAS.lam (\x -> x + x + d)) d
+
+
 testHoasShow1A :: Assertion
 testHoasShow1A = testHoasShow testHoas1 "App (Lam (Add (Var 0) (Const 1))) (Const 2)"
 
 testHoasShow1B :: Assertion 
 testHoasShow1B = testHoasSharingShow testHoas1 "App (Lam (Add (Var 0) (Const 1))) (Const 2)"
+
+
 
 --
 -- QuickCheck instances
@@ -112,3 +140,7 @@ testHoasSharingShow exp expected = (show $ sharingConvert exp) HU.@?= expected
 propInlineSharingRecoveryEquality :: HOAS.Exp Int -> Bool
 propInlineSharingRecoveryEquality exp = 
     (show $ convert exp) == (show $ AST.inlineExp $ sharingConvert exp)
+
+
+testSharingRecovery :: HOAS.Exp Int -> Assertion
+testSharingRecovery exp = (show $ convert exp) HU.@?= (show $ AST.inlineExp $ sharingConvert exp)

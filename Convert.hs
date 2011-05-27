@@ -2,6 +2,7 @@
 module Convert where
 
 -- standard libraries
+import Prelude hiding (exp)
 import Data.Typeable
 import Data.List
 import System.Mem.StableName
@@ -11,7 +12,6 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 
 --friends
-import Debug
 import HOAS
 import Sharing
 import qualified AST as AST
@@ -110,42 +110,3 @@ sharingConvert expr = convertSharingExp Map.empty 0 [] $ recoverSharing expr
 
 convert :: Typeable a => Exp a -> AST.Exp a
 convert expr = convertExp 0 expr
-
------------
-
-eqTest :: (Typeable a) => Exp a -> IO Bool
-eqTest expr = do
-  let a = sharingConvert expr
-      b = convert expr
-      equal = show a == show b
-  if equal
-    then return True
-    else do
-      printf "Not equal:\n%s\n/=\n%s" (show a) (show b)
-      return False
-
--------
-
-t1 :: Exp Int
-t1 = app (lam (\x -> app (lam $ \y -> x + y) (constant (1::Int)))) (constant (2::Int))
-
-t2 :: Exp Int
-t2 = let c = constant (2::Int)
-         a = app (lam (\x -> c + c + x)) c
-     in app (lam (\y -> app (lam (\x -> x + y + 1)) a)) a
-
-t3 :: Exp Int
-t3 = let c = constant (1::Int)
-         a = app (lam (\x -> c + c + x)) c
-     in (app (lam (\x -> x + 1)) a) + a
-
---
--- You should be able to recover sharing under lambdas. Here is an example
---
-t4 :: Exp Int
-t4 = app (lam (\x -> a + a + x)) 728
-  where a = 42 + 666
-
-t5 = let c = constant (2::Int)
-         d = c + c
-     in app (lam (\x -> x + x + d)) d
