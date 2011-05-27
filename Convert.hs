@@ -34,47 +34,45 @@ type TagEnv = Map Int Int
 convertSharingExp :: forall a. Typeable a
   => TagEnv             -- tag environment
   -> Int                -- current lambda environment size
-  -> Int                -- current let environment size
-  -> [StableSharingExp] -- let environment size
+  -> [StableSharingExp] -- let environment
   -> SharingExp a
   -> AST.Exp a
-convertSharingExp _ _ lenvSize lenv (VarSharing sa)
-  | Just i <- findIndex (matchStableExp sa) lenv = AST.Lvar (lenvSize - i - 1)
+convertSharingExp _ _ lenv (VarSharing sa)
+  | Just i <- findIndex (matchStableExp sa) lenv = AST.Lvar i
   | otherwise = error ("convertSharingExp " ++ err)
   where
     err = printf "inconsistent valuation; sa = %s; env = %s"
             (show $ hashStableName sa) (show lenv)
-convertSharingExp m envSize lenvSize lenv (LetSharing sa@(StableSharingExp _ boundExp) bodyExp) =
-  AST.Let (convertSharingExp m envSize lenvSize lenv boundExp)
-          (convertSharingExp m envSize (lenvSize+1) (sa:lenv) bodyExp)
+convertSharingExp m envSize lenv (LetSharing sa@(StableSharingExp _ boundExp) bodyExp) =
+  AST.Let (convertSharingExp m envSize lenv boundExp)
+          (convertSharingExp m envSize (sa:lenv) bodyExp)
 --
 -- This case of 'convertSharingExp' does the HOAS -> de Bruijn conversion.
 --
-convertSharingExp m envSize lenvSize lenv (ExpSharing _ preExpr) = cvtPreExp preExpr
+convertSharingExp m envSize lenv (ExpSharing _ preExpr) = cvtPreExp preExpr
    where
      cvtPreExp :: forall b.Typeable b => PreExp SharingExp SharingFun b -> AST.Exp b
      cvtPreExp preExp = case preExp of
        Tag i            -> case Map.lookup i m of
           Nothing -> error (printf "Value for unique tag '%d' not found. Should never happen." i)
           Just n  -> AST.Var (envSize - n - 1)
-       App fun arg      -> AST.App   (convertSharingFun m envSize lenvSize lenv fun) (cvtExp arg)
+       App fun arg      -> AST.App   (convertSharingFun m envSize lenv fun) (cvtExp arg)
        Const i          -> AST.Const i
        Add e1 e2        -> AST.Add   (cvtExp e1) (cvtExp e2)
        Cond cnd thn els -> AST.Cond  (cvtExp cnd) (cvtExp thn) (cvtExp els)
        Eq e1 e2         -> AST.Eq    (cvtExp e1) (cvtExp e2)
       where
         cvtExp :: Typeable c => SharingExp c -> AST.Exp c
-        cvtExp = convertSharingExp m envSize lenvSize lenv
+        cvtExp = convertSharingExp m envSize lenv
 
 convertSharingFun :: forall a b. (Typeable a, Typeable b)
   => Map Int Int     -- TagEnv
   -> Int             -- lambda environment size
-  -> Int             -- let environment size
   -> [StableSharingExp] -- let environment
   -> SharingFun (a -> b)
   -> AST.Exp (a -> b)
-convertSharingFun m envSize lenvSize lenv (TaggedSharingExp n exp) =
-  AST.Lam $ convertSharingExp (Map.insert n envSize m) (envSize+1) lenvSize lenv exp
+convertSharingFun m envSize lenv (TaggedSharingExp n exp) =
+  AST.Lam $ convertSharingExp (Map.insert n envSize m) (envSize+1) lenv exp
 
 --
 -- ~~~~~~~~~~~~~~~~~~~~
@@ -108,10 +106,12 @@ convertFun envSize (Lam fun) = AST.Lam $ convertExp (envSize+1) (fun (Exp $ Tag 
 -----------
 
 sharingConvert :: Typeable a => Exp a -> AST.Exp a
-sharingConvert expr = convertSharingExp Map.empty 0 0 [] $ recoverSharing expr
+sharingConvert expr = convertSharingExp Map.empty 0 [] $ recoverSharing expr
 
 convert :: Typeable a => Exp a -> AST.Exp a
 convert expr = convertExp 0 expr
+
+-----------
 
 eqTest :: (Typeable a) => Exp a -> IO Bool
 eqTest expr = do
@@ -145,3 +145,7 @@ t3 = let c = constant (1::Int)
 t4 :: Exp Int
 t4 = app (lam (\x -> a + a + x)) 728
   where a = 42 + 666
+
+t5 = let c = constant (2::Int)
+         d = c + c
+     in app (lam (\x -> x + x + d)) d
