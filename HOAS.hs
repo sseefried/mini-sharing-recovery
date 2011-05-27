@@ -41,9 +41,12 @@ newtype Exp a = Exp (PreExp Exp Fun a) deriving Eq
 instance Show (Exp a) where
   show (Exp pexp) = show pexp
 
+instance Show (Fun a) where
+  show (Lam fun) = show (fun (Exp $ Tag (-1)))
+
 instance Show (PreExp Exp Fun a) where
   show (Tag  i)     = printf "Tag %s" (show i)
-  show (App _ e2)   = printf "App <fun> (%s)" (show e2)
+  show (App e1 e2)  = printf "App (Lam %s) (%s)" (show e1) (show e2)
   show (Const i)    = printf "Const %s" (show i)
   show (Add e1 e2)  = printf "Add (%s) (%s)" (show e1) (show e2)
   show (Cond c t e) = printf "Cond (%s) (%s) (%s)" (show c) (show t) (show e)
@@ -83,7 +86,6 @@ showOp (Const _) = "Const"
 showOp (Add _ _) = "Add"
 showOp (Cond _ _ _) = "Cond"
 showOp (Eq _ _) = "Eq"
-
 
 --
 -- Pretty printing
