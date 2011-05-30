@@ -25,6 +25,8 @@ instance Elt Bool
 data Fun t where
   Lam   :: (Elt a, Elt b) => (Exp a -> Exp b) -> Fun (a -> b)
 
+deriving instance Typeable1 Fun
+
 data PreExp exp fun t where
   Tag   :: Elt a => Int -> PreExp exp fun a -- ^ tag for lambda bound variables.
                                             -- Only used during conversion and sharing recovery.
@@ -40,6 +42,8 @@ newtype Exp a = Exp (PreExp Exp Fun a) deriving Eq
 
 instance Show (Exp a) where
   show (Exp pexp) = show pexp
+
+
 
 instance Show (Fun a) where
   show (Lam fun) = show (fun (Exp $ Tag (-1)))

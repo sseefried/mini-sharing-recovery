@@ -1,4 +1,5 @@
-{-# LANGUAGE GADTs, ScopedTypeVariables, FlexibleContexts, PatternGuards #-}
+{-# LANGUAGE GADTs, ScopedTypeVariables, FlexibleContexts, PatternGuards, StandaloneDeriving #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 module Sharing where
 
 -- Standard libraries
@@ -52,6 +53,8 @@ data SharingExp a where
   LetSharing ::          StableSharingExp -> SharingExp a             -> SharingExp a
   ExpSharing :: Elt a => StableName (Exp a) -> PreExp SharingExp SharingFun a -> SharingExp a
 
+deriving instance Typeable1 SharingExp
+
 
 -- A "tagged sharing expression". The 'Int' argument is a /unique identifier/.  During sharing
 -- recovery we traverse into function bodies by applying the function under the 'Lam'
@@ -59,6 +62,8 @@ data SharingExp a where
 -- unique identifier is mapped to the correct de Bruijn index.
 data SharingFun a where
   TaggedSharingExp :: Int {-unique -} -> SharingExp b -> SharingFun (a -> b)
+
+deriving instance Typeable1 SharingFun
 
 -- Stable name for an array computation associated with its sharing-annotated version.
 --
