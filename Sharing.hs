@@ -516,6 +516,7 @@ showSharingFunOp :: SharingFun a -> String
 showSharingFunOp (TaggedSharingExp _ _) = "TaggedSharingExp"
 
 showSharingExpOp :: SharingExp a -> String
-showSharingExpOp (VarSharing _) = "VarSharing"
-showSharingExpOp (LetSharing _ _) = "LetSharing"
-showSharingExpOp (ExpSharing _ _) = "ExpSharing"
+showSharingExpOp (VarSharing sn) = printf "VarSharing %d" (hashStableName sn)
+showSharingExpOp (LetSharing (StableSharingExp sn _) _) =
+  printf "LetSharing %d" (hashStableName sn)
+showSharingExpOp (ExpSharing _ _) = printf "ExpSharing"

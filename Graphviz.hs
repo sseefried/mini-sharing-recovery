@@ -8,6 +8,18 @@ module Graphviz where
 import Data.IORef
 import Data.Typeable
 import System.Mem.StableName
+import Text.Printf
+import Data.Set (Set)
+import qualified Data.Set as Set
+-- import Data.Map (Map)
+import qualified Data.Map as Map
+import System.FilePath
+import System.IO
+import System.IO.Error hiding (catch)
+import System.Directory
+import System.Posix.Process
+import System.Exit
+import Control.Exception (finally)
 
 -- friends
 import HOAS
@@ -16,8 +28,8 @@ import Graph
 
 type EnterFun = (GraphStableName, GraphStableName) -> IO ()
 
-dotSharingExp :: Typeable a => SharingExp a -> IO Graph
-dotSharingExp rootSharingExp = do
+sharingExpToGraph :: Typeable a => SharingExp a -> IO Graph
+sharingExpToGraph rootSharingExp = do
   graphIORef <- newIORef newGraph
   src <- sharingExpStableName rootSharingExp
   traverseSharingExp (addEdge graphIORef) src rootSharingExp
@@ -86,14 +98,93 @@ dotSharingExp rootSharingExp = do
 sharingExpStableName :: Typeable a => SharingExp a -> IO GraphStableName
 sharingExpStableName sharingExp = do
   sn <- makeStableName sharingExp
-  return (StableSharingExpName (showSharingExpOp sharingExp) sn)
+  let name = printf "%s" (showSharingExpOp sharingExp)
+  return (StableSharingExpName name sn)
 
 sharingFunStableName :: Typeable a => SharingFun a -> IO GraphStableName
 sharingFunStableName sharingFun = do
   sn <- makeStableName sharingFun
-  return (StableSharingFunName (showSharingFunOp sharingFun) sn)
+  let name = printf "%s" (showSharingFunOp sharingFun)
+  return (StableSharingFunName name sn)
 
 preExpStableName :: Typeable a => PreExp SharingExp SharingFun a -> IO GraphStableName
 preExpStableName pexp = do
   sn <- makeStableName pexp
-  return (StablePreExpName (showPreExpOp pexp) sn)
+  let name = printf "%s" (showPreExpOp pexp)
+  return (StablePreExpName name sn)
+
+toDot :: Graph -> [String]
+toDot graph = "digraph G { " : dotNodes graph ++ dotEdges graph ++ ["}"]
+  where
+    dotEdges :: Graph -> [String]
+    dotEdges g = Map.foldWithKey (\src tgts xs -> makeEdges src tgts ++ xs) [] (graphEdges g)
+    makeEdges :: GraphNode -> Set GraphNode -> [String]
+    makeEdges src tgts = map (makeEdge src) (Set.toList tgts)
+    makeEdge :: GraphNode -> GraphNode -> String
+    makeEdge src tgt = printf "%s -> %s;" (idForGraphNode src) (idForGraphNode tgt)
+    dotNodes :: Graph -> [String]
+    dotNodes g = map dotNode (Set.toList (graphNodes g))
+    dotNode :: GraphNode -> String
+    dotNode nd@(GraphNode typ nm _ _) = printf "%s [%s, label=\"%s\"];"
+                                        (idForGraphNode nd) (dotShapeForType typ) nm
+
+dotShapeForType :: GraphNodeType -> String
+dotShapeForType gnt = case gnt of
+  SharingExpType -> "shape=box"
+  ExpType        -> "shape=ellipse"
+  FunType        -> "shape=diamond"
+  SharingFunType -> "shape=diamond"
+  PreExpType     -> "shape=ellipse"
+
+idForGraphNode :: GraphNode -> String
+idForGraphNode (GraphNode _ _ hash pos) = printf "node_%02d_%02d" hash pos
+
+dotSharingExp :: Typeable a => SharingExp a -> IO ()
+dotSharingExp sharingExp = do
+  g <- sharingExpToGraph sharingExp
+  let dotString = unlines $ toDot g
+  exists <- findExecutable "dot"
+  case exists of
+    Just dot -> withTempFile "test.dot" (writePSFile dot dotString)
+    Nothing  -> do
+      putStrLn "Couldn't find `dot' tool. Just writing DOT file."
+      writeDotFile dotString
+  where
+    writePSFile dot dotString file h = do
+      hPutStr h dotString
+      hFlush h
+      let output = "test" <.> "ps"
+          flags  = [file, "-Tps", "-o" ++ output]
+      status <- getProcessStatus True True =<< forkProcess (executeFile dot False flags Nothing)
+      case status of
+           Just (Exited ExitSuccess) -> putStrLn $ "PS file successfully written to `" ++
+                                          output ++ "'"
+           _                         -> do
+             putStrLn "dot failed to write Postscript file. Just writing the DOT file."
+             writeDotFile dotString       -- fall back to writing the dot file
+    --
+    writeDotFile :: String -> IO ()
+    writeDotFile dotString = catch (writeDotFile' dotString) handler
+    writeDotFile' dotString = do
+      let path = "test" <.> "dot"
+      h <- openFile path WriteMode
+      hPutStr h dotString
+      putStrLn ("DOT file successfully written to `" ++ path ++ "'")
+      hClose h
+    handler :: IOError -> IO ()
+    handler e =
+      case True of
+        _ | isAlreadyInUseError e -> putStrLn "isAlreadyInUseError"
+          | isDoesNotExistError e -> putStrLn "isDoesNotExistError"
+          | isFullError e         -> putStrLn "isFullError"
+          | isEOFError e          -> putStrLn "isEOFError"
+          | isPermissionError   e -> putStrLn "isPermissionError"
+          | isIllegalOperation e  -> putStrLn "isIllegalOperation"
+          | isUserError e         -> putStrLn "isUserError"
+          | otherwise             -> putStrLn "Unknown error"
+
+withTempFile :: String -> (FilePath -> Handle -> IO a) -> IO a
+withTempFile pattern f = do
+  tempDir <- catch getTemporaryDirectory (\_ -> return ".")
+  (tempFile, tempH) <- openTempFile tempDir pattern
+  finally (f tempFile tempH) (hClose tempH >> removeFile tempFile)

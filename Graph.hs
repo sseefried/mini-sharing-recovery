@@ -1,11 +1,13 @@
 {-# LANGUAGE GADTs, PatternGuards, RankNTypes, ScopedTypeVariables, KindSignatures #-}
 module Graph (
   GraphStableName(..),
+  GraphNodeType(..),
+  GraphNode(..),
   Graph, -- opaque
   -- * Functions
   newGraph, insertEdge, graphNodes, graphEdges
 
-  -- instances 
+  -- instances
   -- Eq (GraphStableName)
 
 ) where
@@ -47,7 +49,6 @@ data GraphStableName  where
   StableFunName        :: Typeable a => String -> StableName (Fun a)            -> GraphStableName
   StablePreExpName     :: (Typeable a, Typeable1 exp, Typeable1 fun)
                        => String -> StableName (PreExp exp fun a) -> GraphStableName
-
 
 instance Show GraphStableName where
   show (StableSharingExpName nm sn) =
@@ -153,5 +154,3 @@ compareStableNamePreExp pexp1 pexp2 = case gcasted of
                 `mkAppTy` typeOf1 (undefined :: fun a) `mkAppTy` typeOf (undefined :: a)
     getArg :: c x -> x
     getArg = undefined
-
-

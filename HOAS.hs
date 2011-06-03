@@ -43,8 +43,6 @@ newtype Exp a = Exp (PreExp Exp Fun a) deriving Eq
 instance Show (Exp a) where
   show (Exp pexp) = show pexp
 
-
-
 instance Show (Fun a) where
   show (Lam fun) = show (fun (Exp $ Tag (-1)))
 
@@ -84,9 +82,9 @@ c ? (t,e) = Exp $ Cond c t e
 a ==* b = Exp $ Eq a b
 
 showPreExpOp :: PreExp exp fun a -> String
-showPreExpOp (Tag _)      = "Tag"
+showPreExpOp (Tag i)      = printf "Tag %d" i
 showPreExpOp (App _ _)    = "App"
-showPreExpOp (Const _)    = "Const"
+showPreExpOp (Const v)    = printf "Const %s" (show v)
 showPreExpOp (Add _ _)    = "Add"
 showPreExpOp (Cond _ _ _) = "Cond"
 showPreExpOp (Eq _ _)     = "Eq"
