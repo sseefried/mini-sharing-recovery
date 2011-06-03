@@ -83,13 +83,16 @@ c ? (t,e) = Exp $ Cond c t e
 (==*) :: Elt a => Exp a -> Exp a -> Exp Bool
 a ==* b = Exp $ Eq a b
 
-showOp :: PreExp exp fun a -> String
-showOp (Tag _)   = "Tag"
-showOp (App _ _) = "App"
-showOp (Const _) = "Const"
-showOp (Add _ _) = "Add"
-showOp (Cond _ _ _) = "Cond"
-showOp (Eq _ _) = "Eq"
+showPreExpOp :: PreExp exp fun a -> String
+showPreExpOp (Tag _)      = "Tag"
+showPreExpOp (App _ _)    = "App"
+showPreExpOp (Const _)    = "Const"
+showPreExpOp (Add _ _)    = "Add"
+showPreExpOp (Cond _ _ _) = "Cond"
+showPreExpOp (Eq _ _)     = "Eq"
+
+showFunOp :: Fun a -> String
+showFunOp (Lam _) = "Lam"
 
 --
 -- Pretty printing

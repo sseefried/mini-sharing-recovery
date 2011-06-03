@@ -61,7 +61,7 @@ deriving instance Typeable1 SharingExp
 -- constructor to a value @Tag n@ (where @n@ is the unique identifer). During conversion this
 -- unique identifier is mapped to the correct de Bruijn index.
 data SharingFun a where
-  TaggedSharingExp :: Int {-unique -} -> SharingExp b -> SharingFun (a -> b)
+  TaggedSharingExp :: Elt b => Int {-unique -} -> SharingExp b -> SharingFun (a -> b)
 
 deriving instance Typeable1 SharingFun
 
@@ -184,7 +184,7 @@ makeOccMap rootExp
           sn <- makeStableExp acc'
           isRepeatedOccurence <- enter updateMap $ StableExpName sn
 
-          traceLine (showOp pexp) $
+          traceLine (showPreExpOp pexp) $
             if isRepeatedOccurence
               then "REPEATED occurence"
               else "first occurence (" ++ show (hashStableName sn) ++ ")"
@@ -507,3 +507,15 @@ recoverSharing expr =
               frozenOccMap <- freezeOccMap occMap'
               return (exp', frozenOccMap)
     in determineScopes occMap exp
+
+--
+-- More show/pretty printing
+--
+
+showSharingFunOp :: SharingFun a -> String
+showSharingFunOp (TaggedSharingExp _ _) = "TaggedSharingExp"
+
+showSharingExpOp :: SharingExp a -> String
+showSharingExpOp (VarSharing _) = "VarSharing"
+showSharingExpOp (LetSharing _ _) = "LetSharing"
+showSharingExpOp (ExpSharing _ _) = "ExpSharing"

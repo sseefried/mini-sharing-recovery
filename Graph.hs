@@ -3,7 +3,7 @@ module Graph (
   GraphStableName(..),
   Graph, -- opaque
   -- * Functions
-  newGraph, insertEdge
+  newGraph, insertEdge, graphNodes, graphEdges
 
   -- instances 
   -- Eq (GraphStableName)
@@ -22,6 +22,7 @@ import qualified Data.Set as Set
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe
+import Text.Printf
 
 -- friends
 import HOAS
@@ -34,18 +35,31 @@ data GraphNodeType = SharingExpType | ExpType | FunType | SharingFunType | PreEx
 -- it allows us to have an Ord instance.
 data GraphNode = GraphNode
                    GraphNodeType  -- type
+                   String         -- name
                    Int            -- hash of stable name
                    Int            -- position in lookup list
    deriving (Eq, Show, Ord)
 
 data GraphStableName  where
-  StableSharingExpName :: Typeable a => StableName (SharingExp a)     -> GraphStableName
-  StableSharingFunName :: Typeable a => StableName (SharingFun a)     -> GraphStableName
-  StableExpName        :: Typeable a => StableName (Exp a)            -> GraphStableName
-  StableFunName        :: Typeable a => StableName (Fun a)            -> GraphStableName
+  StableSharingExpName :: Typeable a => String -> StableName (SharingExp a)     -> GraphStableName
+  StableSharingFunName :: Typeable a => String -> StableName (SharingFun a)     -> GraphStableName
+  StableExpName        :: Typeable a => String -> StableName (Exp a)            -> GraphStableName
+  StableFunName        :: Typeable a => String -> StableName (Fun a)            -> GraphStableName
   StablePreExpName     :: (Typeable a, Typeable1 exp, Typeable1 fun)
-                       => StableName (PreExp exp fun a) -> GraphStableName
+                       => String -> StableName (PreExp exp fun a) -> GraphStableName
 
+
+instance Show GraphStableName where
+  show (StableSharingExpName nm sn) =
+    printf "StableSharingExpName: %s %s" nm (show $ hashStableName sn)
+  show (StableSharingFunName nm sn) =
+    printf "StableSharingFunName: %s %s" nm (show $ hashStableName sn)
+  show (StableExpName nm sn) =
+    printf "StableExpName: %s %s" nm (show $ hashStableName sn)
+  show (StableFunName nm sn) =
+    printf "StableFunName: %s %s" nm (show $ hashStableName sn)
+  show (StablePreExpName nm sn) =
+    printf "StablePreExpName: %s %s" nm (show $ hashStableName sn)
 --
 -- Graphs
 --
@@ -53,7 +67,7 @@ data GraphStableName  where
 type GraphLookup = IntMap [GraphStableName]
 data Graph = Graph { graphLookup :: GraphLookup
                    , graphNodes :: Set GraphNode
-                   , graphEdges :: Map GraphNode GraphNode }
+                   , graphEdges :: Map GraphNode (Set GraphNode) } deriving Show
 
 newGraph :: Graph
 newGraph = Graph { graphLookup = IntMap.empty, graphNodes = Set.empty, graphEdges = Map.empty }
@@ -65,7 +79,9 @@ insertEdge g (src, tgt) = g { graphNodes = graphNodes', graphEdges = graphEdges'
     srcNode = fromJust $ lookupGraphNode src graphLookup'
     tgtNode = fromJust $ lookupGraphNode tgt graphLookup'
     graphNodes' = foldr Set.insert (graphNodes g) [srcNode, tgtNode]
-    graphEdges' = Map.insert srcNode tgtNode (graphEdges g)
+    graphEdges' =
+       let tgtNodes = fromMaybe (Set.empty) $  Map.lookup srcNode (graphEdges g)
+       in  Map.insert srcNode (Set.insert tgtNode tgtNodes) (graphEdges g)
 
 insertGraphLookup :: GraphLookup -> GraphStableName -> GraphLookup
 insertGraphLookup tbl gsn = IntMap.insert hash (gsns ++ [gsn]) tbl
@@ -75,37 +91,37 @@ insertGraphLookup tbl gsn = IntMap.insert hash (gsns ++ [gsn]) tbl
 
 hashGraphStableName :: GraphStableName -> Int
 hashGraphStableName gsn = case gsn of
-  StableSharingExpName sn -> hashStableName sn
-  StableSharingFunName sn -> hashStableName sn
-  StableExpName        sn -> hashStableName sn
-  StableFunName        sn -> hashStableName sn
-  StablePreExpName     sn -> hashStableName sn
+  StableSharingExpName _ sn -> hashStableName sn
+  StableSharingFunName _ sn -> hashStableName sn
+  StableExpName        _ sn -> hashStableName sn
+  StableFunName        _ sn -> hashStableName sn
+  StablePreExpName     _ sn -> hashStableName sn
 
 --
 -- Look up the occurence map keyed by array computations using a stable name.  If a the key does
 -- not exist in the map, return an occurence count of '1'.
 --
 lookupGraphNode :: GraphStableName -> GraphLookup -> Maybe GraphNode
-lookupGraphNode sa@(StableSharingExpName sn) = lookupGraphNodeAux SharingExpType sn sa
-lookupGraphNode sa@(StableSharingFunName sn) = lookupGraphNodeAux SharingFunType sn sa
-lookupGraphNode sa@(StableExpName sn)        = lookupGraphNodeAux ExpType        sn sa
-lookupGraphNode sa@(StableFunName sn)        = lookupGraphNodeAux FunType        sn sa
-lookupGraphNode sa@(StablePreExpName sn)     = lookupGraphNodeAux PreExpType     sn sa
+lookupGraphNode sa@(StableSharingExpName nm sn) = lookupGraphNodeAux SharingExpType nm sn sa
+lookupGraphNode sa@(StableSharingFunName nm sn) = lookupGraphNodeAux SharingFunType nm sn sa
+lookupGraphNode sa@(StableExpName nm sn)        = lookupGraphNodeAux ExpType        nm sn sa
+lookupGraphNode sa@(StableFunName nm sn)        = lookupGraphNodeAux FunType        nm sn sa
+lookupGraphNode sa@(StablePreExpName nm sn)     = lookupGraphNodeAux PreExpType     nm sn sa
 
-lookupGraphNodeAux :: GraphNodeType -> StableName a -> GraphStableName
+lookupGraphNodeAux :: GraphNodeType -> String -> StableName a -> GraphStableName
                    -> GraphLookup -> Maybe GraphNode
-lookupGraphNodeAux gnType sn sa nds = do
+lookupGraphNodeAux gnType nm sn sa nds = do
   let hash = hashStableName sn
   gsns <- IntMap.lookup hash nds
   i   <- findIndex (==sa) gsns
-  return (GraphNode gnType hash i)
+  return (GraphNode gnType nm hash i)
 
 instance Eq GraphStableName where
-  (StableSharingExpName sn1) == (StableSharingExpName sn2) = compareSN sn1 sn2
-  (StableSharingFunName sn1) == (StableSharingFunName sn2) = compareSN sn1 sn2
-  (StableExpName        sn1) == (StableExpName        sn2) = compareSN sn1 sn2
-  (StableFunName        sn1) == (StableExpName        sn2) = compareSN sn1 sn2
-  (StablePreExpName     sn1) == (StablePreExpName     sn2) = compareStableNamePreExp sn1 sn2
+  (StableSharingExpName _ sn1) == (StableSharingExpName _ sn2) = compareSN sn1 sn2
+  (StableSharingFunName _ sn1) == (StableSharingFunName _ sn2) = compareSN sn1 sn2
+  (StableExpName        _ sn1) == (StableExpName        _ sn2) = compareSN sn1 sn2
+  (StableFunName        _ sn1) == (StableExpName        _ sn2) = compareSN sn1 sn2
+  (StablePreExpName     _ sn1) == (StablePreExpName     _ sn2) = compareStableNamePreExp sn1 sn2
   _                          == _                          = False
 
 compareSN :: (Typeable a, Typeable b) => StableName a -> StableName b -> Bool
